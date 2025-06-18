@@ -1,0 +1,11 @@
+spring:
+  application:
+    name: api-jwt-test
+
+server:
+  port: 0  # Porta aleatória para testes
+
+logging:
+  level:
+    root: INFO
+    com.desafioitau: DEBUG 
