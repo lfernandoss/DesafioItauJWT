@@ -1,0 +1,136 @@
+version: '3.8'
+
+services:
+  localstack:
+    image: localstack/localstack:latest
+    ports:
+      - "4566:4566"            # LocalStack Edge Proxy
+      - "4510-4559:4510-4559"  # external services port range
+    environment:
+      - DEBUG=1
+      - DOCKER_HOST=unix:///var/run/docker.sock
+      - SERVICES=ec2,iam,logs,sts
+      - DEFAULT_REGION=us-east-1
+      - AWS_DEFAULT_REGION=us-east-1
+      - AWS_ACCESS_KEY_ID=test
+      - AWS_SECRET_ACCESS_KEY=test
+    volumes:
+      - "${LOCALSTACK_VOLUME_DIR:-./volume}:/var/lib/localstack"
+      - "/var/run/docker.sock:/var/run/docker.sock"
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8080:8080"
+    environment:
+      - SPRING_PROFILES_ACTIVE=dev
+      - AWS_ACCESS_KEY_ID=test
+      - AWS_SECRET_ACCESS_KEY=test
+      - AWS_ENDPOINT_URL=http://localstack:4566
+    depends_on:
+      - localstack
+
+  # Script de inicialização para configurar o ambiente AWS
+  aws-init:
+    image: alpine:latest
+    volumes:
+      - ./scripts:/scripts
+    environment:
+      - AWS_ACCESS_KEY_ID=test
+      - AWS_SECRET_ACCESS_KEY=test
+      - AWS_DEFAULT_REGION=us-east-1
+      - ENDPOINT_URL=http://localstack:4566
+    command: >
+      sh -c "
+        apk add --no-cache aws-cli &&
+        chmod +x /scripts/setup-aws.sh &&
+        sh /scripts/setup-aws.sh
+      "
+    depends_on:
+      - localstack
+
+
+  # Deploy da aplicação em EC2
+  ec2-deploy:
+    image: alpine:latest
+    volumes:
+      - ./scripts:/scripts
+      - ./app-key.pem:/app-key.pem
+    environment:
+      - AWS_ACCESS_KEY_ID=test
+      - AWS_SECRET_ACCESS_KEY=test
+      - AWS_DEFAULT_REGION=us-east-1
+      - ENDPOINT_URL=http://localstack:4566
+    command: >
+      sh -c "
+        apk add --no-cache aws-cli &&
+        chmod +x /scripts/deploy-ec2.sh &&
+        sh /scripts/deploy-ec2.sh
+      "
+    depends_on:
+      - aws-init
+
+  # Gerenciador da instância EC2
+  ec2-manager:
+    image: alpine:latest
+    volumes:
+      - ./scripts:/scripts
+      - ./app-key.pem:/app-key.pem
+    environment:
+      - AWS_ACCESS_KEY_ID=test
+      - AWS_SECRET_ACCESS_KEY=test
+      - AWS_DEFAULT_REGION=us-east-1
+      - ENDPOINT_URL=http://localstack:4566
+    command: >
+      sh -c "
+        apk add --no-cache aws-cli curl openssh-client &&
+        chmod +x /scripts/manage-ec2.sh &&
+        echo 'EC2 Manager disponível. Use: docker-compose run ec2-manager sh /scripts/manage-ec2.sh [comando]' &&
+        tail -f /dev/null
+      "
+    depends_on:
+      - ec2-deploy
+
+  # Teste automático da API
+  api-test:
+    image: alpine:latest
+    volumes:
+      - ./scripts:/scripts
+    environment:
+      - AWS_ACCESS_KEY_ID=test
+      - AWS_SECRET_ACCESS_KEY=test
+      - AWS_DEFAULT_REGION=us-east-1
+      - ENDPOINT_URL=http://localstack:4566
+    command: >
+      sh -c "
+        apk add --no-cache aws-cli curl &&
+        chmod +x /scripts/test-api.sh &&
+        echo 'Aguardando deploy da aplicação...' &&
+        sleep 60 &&
+        sh /scripts/test-api.sh
+      "
+    depends_on:
+      - ec2-deploy
+
+  # Verificação de rede
+  network-check:
+    image: alpine:latest
+    volumes:
+      - ./scripts:/scripts
+    environment:
+      - AWS_ACCESS_KEY_ID=test
+      - AWS_SECRET_ACCESS_KEY=test
+      - AWS_DEFAULT_REGION=us-east-1
+      - ENDPOINT_URL=http://localstack:4566
+    command: >
+      sh -c "
+        apk add --no-cache aws-cli curl &&
+        chmod +x /scripts/fix-network.sh &&
+        sh /scripts/fix-network.sh
+      "
+    depends_on:
+      - aws-init
+
+
